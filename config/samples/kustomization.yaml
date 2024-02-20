@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- angi_v1_podinfo.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples
