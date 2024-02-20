@@ -9,4 +9,15 @@ metadata:
     app.kubernetes.io/created-by: angi-takehome
   name: podinfo-sample
 spec:
-  # TODO(user): Add fields here
+  replicaCount: 2
+  resources:
+    memoryLimit: 64Mi
+    cpuRequest: 100m
+  image:
+    repository: ghcr.io/stefanprodan/podinfo
+    tag: latest
+  ui:
+    color: "#34577c"
+    message: "some string"
+  redis:
+    enabled: true

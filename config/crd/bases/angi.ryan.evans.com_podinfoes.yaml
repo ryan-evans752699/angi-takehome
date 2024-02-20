@@ -39,10 +39,51 @@ spec:
           spec:
             description: PodInfoSpec defines the desired state of PodInfo
             properties:
-              foo:
-                description: Foo is an example field of PodInfo. Edit podinfo_types.go
-                  to remove/update
-                type: string
+              image:
+                properties:
+                  repository:
+                    type: string
+                  tag:
+                    type: string
+                required:
+                - repository
+                - tag
+                type: object
+              redis:
+                properties:
+                  enabled:
+                    type: boolean
+                required:
+                - enabled
+                type: object
+              replicaCount:
+                type: integer
+              resources:
+                properties:
+                  cpuRequest:
+                    type: string
+                  memoryLimit:
+                    type: string
+                required:
+                - cpuRequest
+                - memoryLimit
+                type: object
+              ui:
+                properties:
+                  color:
+                    type: string
+                  message:
+                    type: string
+                required:
+                - color
+                - message
+                type: object
+            required:
+            - image
+            - redis
+            - replicaCount
+            - resources
+            - ui
             type: object
           status:
             description: PodInfoStatus defines the observed state of PodInfo

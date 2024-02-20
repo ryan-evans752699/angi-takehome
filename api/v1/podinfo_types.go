@@ -25,11 +25,32 @@ import (
 
 // PodInfoSpec defines the desired state of PodInfo
 type PodInfoSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of PodInfo. Edit podinfo_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	ReplicaCount int          `json:"replicaCount"`
+	Resources    ResourceInfo `json:"resources"`
+	Image        ImageInfo    `json:"image"`
+	UI           UIInfo       `json:"ui"`
+	Redis        RedisInfo    `json:"redis"`
+}
+
+type ResourceInfo struct {
+	MemoryLimit string `json:"memoryLimit"`
+	CpuRequest  string `json:"cpuRequest"`
+}
+
+type ImageInfo struct {
+	Repository string `json:"repository"`
+	Tag        string `json:"tag"`
+}
+
+type UIInfo struct {
+	Color   string `json:"color"`
+	Message string `json:"message"`
+}
+
+type RedisInfo struct {
+	Enabled bool `json:"enabled"`
 }
 
 // PodInfoStatus defines the observed state of PodInfo
