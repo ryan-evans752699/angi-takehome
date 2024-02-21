@@ -18,6 +18,6 @@ spec:
     tag: latest
   ui:
     color: "#34577c"
-    message: "some string"
+    message: "ryan is safdasdfa"
   redis:
     enabled: true
