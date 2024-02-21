@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"gopkg.in/yaml.v2"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -61,38 +62,91 @@ func (r *PodInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	loggr.Info("Reconciling")
 
 	podInfoCR := angiv1.PodInfo{}
-	r.Client.Get(ctx, req.NamespacedName, &podInfoCR)
-	loggr.Info(podInfoCR.Name)
-
-	loggr.Info(podInfoCR.Spec.UI.Message)
-
-	if err := r.reconcilePodInfoConfigmap(ctx, podInfoCR); err != nil {
-		loggr.Error(err, "Error recociling configmap for CR", "CR", podInfoCR.Name)
-
+	err := r.Client.Get(ctx, req.NamespacedName, &podInfoCR)
+	if err != nil {
+		// We do not care if the object is not found. This will catch
+		// the auto-requeue on removing the finalizer
+		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if err := r.reconcilePodInfoDeployment(ctx, podInfoCR); err != nil {
-		loggr.Error(err, "Error recociling deployment for CR", "CR", podInfoCR.Name)
+	CRFinalizer := "angi.ryan.evans.com/finalizer"
 
+	if podInfoCR.DeletionTimestamp.IsZero() {
+		// New CR created.
+		if !controllerutil.ContainsFinalizer(&podInfoCR, CRFinalizer) {
+			// Add a finalizer to allow reconciliation to happen before apiserver deletes the CR
+			controllerutil.AddFinalizer(&podInfoCR, CRFinalizer)
+			// Update the CR to add the finalizer
+			if err := r.Update(ctx, &podInfoCR); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	} else {
+		// The object is being deleted
+		if controllerutil.ContainsFinalizer(&podInfoCR, CRFinalizer) {
+			// CR has a finalizer so we can delete our pod-info deployment now
+			if err := r.deletePodInfoDeployment(ctx, podInfoCR); err != nil {
+				// If we fail, return the error so the request is requeued.
+				return ctrl.Result{}, err
+			}
+			loggr.Info("Deployment successfully deleted", "pod_info_cr_name", podInfoCR.Name)
+
+			// Remove our finalizer from the CR and update it.
+			controllerutil.RemoveFinalizer(&podInfoCR, CRFinalizer)
+			if err := r.Update(ctx, &podInfoCR); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+
+		// Stop reconciliation as the item is being deleted
+		return ctrl.Result{}, nil
 	}
 
-	// TODO(user): your logic here
+	// Sync the pod-info deployment with the CR
+	if err := r.createOrUpdatePodInfoDeployment(ctx, podInfoCR); err != nil {
+		return ctrl.Result{}, err
+	}
+	loggr.Info("Deployment successfully created / updated", "pod_info_cr_name", podInfoCR.Name)
 
 	return ctrl.Result{}, nil
 }
 
-func (r *PodInfoReconciler) reconcilePodInfoDeployment(ctx context.Context, podInfo angiv1.PodInfo) error {
-	loggr := log.FromContext(ctx)
-
+// deletePodInfoDeployment will delete the PodInfo deployment for a given PodInfo CR
+func (r *PodInfoReconciler) deletePodInfoDeployment(ctx context.Context, podInfoCR angiv1.PodInfo) error {
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      podInfo.Name,
+			Name:      podInfoCR.Name,
 			Namespace: "default",
 		},
 	}
-	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+
+	err := r.Delete(ctx, deployment)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// createOrUpdatePodInfoDeployment creates or updates a deployment K8s resource based on a given
+// PodInfo CR
+func (r *PodInfoReconciler) createOrUpdatePodInfoDeployment(ctx context.Context, podInfoCR angiv1.PodInfo) error {
+
+	// Convert the UI settings from the CR into a byte slice
+	envVars, err := yaml.Marshal(podInfoCR.Spec.UI)
+	if err != nil {
+		return err
+	}
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podInfoCR.Name,
+			Namespace: "default",
+		},
+	}
+
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
 		deployment.Spec = appsv1.DeploymentSpec{
-			Replicas: int32Ptr(int32(podInfo.Spec.ReplicaCount)),
+			Replicas: int32Ptr(int32(podInfoCR.Spec.ReplicaCount)),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
 					"app": "podinfo",
@@ -106,6 +160,11 @@ func (r *PodInfoReconciler) reconcilePodInfoDeployment(ctx context.Context, podI
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
+					// We hash the env vars (the UI of the spec of the CR) to ensure the pods
+					// roll whenever the env vars chagne. This allows us to hotdeploy var changes
+					Annotations: map[string]string{
+						"envVars": sha256Encode(string(envVars)),
+					},
 					Labels: map[string]string{
 						"app": "podinfo",
 					},
@@ -113,8 +172,8 @@ func (r *PodInfoReconciler) reconcilePodInfoDeployment(ctx context.Context, podI
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
-							Name:  podInfo.Name,
-							Image: fmt.Sprintf("%s:%s", podInfo.Spec.Image.Repository, podInfo.Spec.Image.Tag),
+							Name:  podInfoCR.Name,
+							Image: fmt.Sprintf("%s:%s", podInfoCR.Spec.Image.Repository, podInfoCR.Spec.Image.Tag),
 							Ports: []corev1.ContainerPort{
 								{
 									ContainerPort: 9898,
@@ -122,30 +181,20 @@ func (r *PodInfoReconciler) reconcilePodInfoDeployment(ctx context.Context, podI
 							},
 							Env: []corev1.EnvVar{
 								{
-									Name: "PODINFO_UI_COLOR",
-									ValueFrom: &corev1.EnvVarSource{
-										ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{Name: podInfo.Name},
-											Key:                  "PODINFO_UI_COLOR",
-										},
-									},
+									Name:  "PODINFO_UI_COLOR",
+									Value: podInfoCR.Spec.UI.Color,
 								},
 								{
-									Name: "PODINFO_UI_MESSAGE",
-									ValueFrom: &corev1.EnvVarSource{
-										ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
-											LocalObjectReference: corev1.LocalObjectReference{Name: podInfo.Name},
-											Key:                  "PODINFO_UI_MESSAGE",
-										},
-									},
+									Name:  "PODINFO_UI_MESSAGE",
+									Value: podInfoCR.Spec.UI.Message,
 								},
 							},
 							Resources: corev1.ResourceRequirements{
 								Limits: corev1.ResourceList{
-									corev1.ResourceMemory: resource.MustParse(podInfo.Spec.Resources.MemoryLimit),
+									corev1.ResourceMemory: resource.MustParse(podInfoCR.Spec.Resources.MemoryLimit),
 								},
 								Requests: corev1.ResourceList{
-									corev1.ResourceCPU: resource.MustParse(podInfo.Spec.Resources.CpuRequest),
+									corev1.ResourceCPU: resource.MustParse(podInfoCR.Spec.Resources.CpuRequest),
 								},
 							},
 						},
@@ -153,90 +202,29 @@ func (r *PodInfoReconciler) reconcilePodInfoDeployment(ctx context.Context, podI
 				},
 			},
 		}
-
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
-	loggr.Info("Deployment reconciled", "operation", op)
-
 	return nil
 }
 
-func (r *PodInfoReconciler) reconcilePodInfoConfigmap(ctx context.Context, podInfo angiv1.PodInfo) error {
-	loggr := log.FromContext(ctx)
-
-	// Define the ConfigMap object
-	configMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podInfo.Name,
-			Namespace: "default",
-		},
-	}
-
-	// Perform create or update operation on the ConfigMap
-	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, configMap, func() error {
-		// Update the data in the ConfigMap
-		configMap.Data = map[string]string{
-			"PODINFO_UI_COLOR":   podInfo.Spec.UI.Color,
-			"PODINFO_UI_MESSAGE": podInfo.Spec.UI.Message,
-		}
-		return nil
-	})
-
-	if err != nil {
-		return err
-	}
-
-	// Log the operation result
-	loggr.Info("ConfigMap successfully reconciled", "operation", op)
-
-	return nil
-}
-
+// int32Ptr will convert an int32 to a pointer to an int32
 func int32Ptr(i int32) *int32 { return &i }
 
+// intstrPtr will convert an int to a pointer to an intstr
 func intstrPtr(value int) *intstr.IntOrString {
 	intValue := intstr.FromInt(value)
 	return &intValue
 }
 
+// sha256Encode will hash a given string and return the hash
 func sha256Encode(input string) string {
 	hash := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(hash[:])
 }
-
-// func (r *PodInfoReconciler) redisSpec() error {
-//     pod := &corev1.Pod{
-//         ObjectMeta: metav1.ObjectMeta{
-//             Name:      "redis-pod",
-//             Namespace: "default",
-//         },
-//         Spec: corev1.PodSpec{
-//             Containers: []corev1.Container{
-//                 {
-//                     Name:  "redis",
-//                     Image: "redis",
-//                     Ports: []corev1.ContainerPort{
-//                         {
-//                             ContainerPort: 1234,
-//                         },
-//                     },
-//                 },
-//             },
-//         },
-//     }
-
-//     // Create the Pod
-//     _, err := clientset.CoreV1().Pods("default").Create(context.Background(), pod, metav1.CreateOptions{})
-//     if err != nil {
-//         return err
-//     }
-
-//     return nil
-// }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *PodInfoReconciler) SetupWithManager(mgr ctrl.Manager) error {

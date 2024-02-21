@@ -9,7 +9,7 @@ metadata:
     app.kubernetes.io/created-by: angi-takehome
   name: podinfo-sample
 spec:
-  replicaCount: 2
+  replicaCount: 3
   resources:
     memoryLimit: 64Mi
     cpuRequest: 100m
@@ -18,6 +18,6 @@ spec:
     tag: latest
   ui:
     color: "#34577c"
-    message: "ryan is safdasdfa"
+    message: "ryan is awesome 34324"
   redis:
     enabled: true
