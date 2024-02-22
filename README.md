@@ -1,8 +1,5 @@
-# angi-takehome
-// TODO(user): Add simple overview of use/purpose
-
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+This project defines a custom resource (`PodInfo`) that will track the desired state of a deployment of [PodInfo](https://github.com/stefanprodan/podinfo/tree/master/cmd/podinfo). Additionally, it contains a kubernetes operator will ensure the state of the cluster is in sync with the `PodInfo` custom resource.
 
 ## Getting Started
 
@@ -12,40 +9,37 @@
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.
 
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
+**NOTE:** Run `make help` for more information on all potential `make` targets
 
-```sh
-make docker-build docker-push IMG=<some-registry>/angi-takehome:tag
-```
+More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
 
-**NOTE:** This image ought to be published in the personal registry you specified. 
-And it is required to have access to pull the image from the working environment. 
-Make sure you have the proper permission to the registry if the above commands don’t work.
-
+### To Deploy locally on a cluster (ie: MiniKube)
 **Install the CRDs into the cluster:**
 
 ```sh
 make install
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+**Run the operator locally:**
 
 ```sh
-make deploy IMG=<some-registry>/angi-takehome:tag
+make run
 ```
 
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin 
-privileges or be logged in as admin.
 
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
+**Create a CR in the cluster:**
+
+One is defined in `config/sample` or you can create your own:
 
 ```sh
 kubectl apply -k config/samples/
 ```
 
->**NOTE**: Ensure that the samples has default values to test it out.
+**Modify the CR in the cluster (if needed):**
+
+```sh
+kubectl edit PodInfo <CR_NAME>
+```
 
 ### To Uninstall
 **Delete the instances (CRs) from the cluster:**
@@ -53,6 +47,8 @@ kubectl apply -k config/samples/
 ```sh
 kubectl delete -k config/samples/
 ```
+
+**Note** - Running this step should delete all resources managed by the controller
 
 **Delete the APIs(CRDs) from the cluster:**
 
@@ -66,35 +62,46 @@ make uninstall
 make undeploy
 ```
 
-## Project Distribution
+## How to use the application
+1. After a custom resource exists in the cluster, port-forward the PodInfo deployment. If using the custom resource defined in config/samples: `kubectl port-forward deployment.apps/podinfo-sample-pod-info-deployment 9898:9898`
+2. Navigate to a browser and open the application: `localhost:9898`
+3. Observe the color / message displayed.
+4. Modify the `PodInfo` custom resource in the cluster: `kubectl edit PodInfo <CUSTOM_RESOURCE_NAME>` and change any value you want. Some common values to change are: 
+    - `spec.ui.color` to change the color
+    - `spec.ui.message` to change the message
+    - `spec.redis.enabled` to enable /disable redis
+    - `spec.replicaCount` to increase / decrease the number of replicas
+5. Watch the operator's deployment logs. If using the custom resource defined in config/samples: `kubectl logs deployment.apps/podinfo-sample-pod-info-deployment`
+6. Validate you chnage by repeating step 2. If you are using port-forwarding, when the pods roll, you will need to re-port-forward the deployment.
 
-Following are the steps to build the installer and distribute this project to users.
 
-1. Build the installer for the image built and published in the registry:
+## Custom Resource Definition
+This project contains a custom resource definition which is used as the source of truth for the PodInfo deployment in the cluster. The custom resource works as follows:
 
-```sh
-make build-installer IMG=<some-registry>/angi-takehome:tag
+```
+spec:
+  replicaCount: <the number of pods to deploy podinfo to>
+  resources:
+    memoryLimit: <the memory limit allowed for the podinfo container>
+    cpuRequest: <the cpu limit allowed for the podinfo container>
+  image:
+    repository: <the repo to pull the image from>
+    tag: <the image tag>
+  ui:
+    color: <a hex color code to use as a background for podinfo>
+    message: <a message to display in podinfo>
+    cache: <the redis cache to point podinfo to>
+  redis:
+    enabled: <if cache should be enabled>
 ```
 
-NOTE: The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without
-its dependencies.
+## Controllers
+This project contains a controller to watch for `PodInfo` custom resources in the cluster. The reconcile loop works as follows:
 
-2. Using the installer
-
-Users can just run kubectl apply -f <URL for YAML BUNDLE> to install the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/angi-takehome/<tag or branch>/dist/install.yaml
-```
-
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+1. Pull the `PodInfo` custom resource from the cluster that the loop was kicked off from.
+2. If the `PodInfo` custom resource does not have redis enabled, delete the redis resources. This is used to allow for the cleanup of redis resources if redis was disabled (via editing the `PodInfo` custom resource).
+3. Check if the `PodInfo` custom resource has been deleted, if not, add a finalizer to the `PodInfo` custom resource, if it does not already exist.
+4. If the `PodInfo` custom resource has been deleted, clean up the PodInfo resources and the redis resources in the cluster. Once that is done, remove the finalizer so the `PodInfo` custom resource can be deleted by the api server.
 
 ## License
 
