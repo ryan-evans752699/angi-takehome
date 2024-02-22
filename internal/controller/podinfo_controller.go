@@ -37,6 +37,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+const (
+	CRFinalizer = "angi.ryan.evans.com/finalizer"
+)
+
 // PodInfoReconciler reconciles a PodInfo object
 type PodInfoReconciler struct {
 	client.Client
@@ -69,7 +73,15 @@ func (r *PodInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	CRFinalizer := "angi.ryan.evans.com/finalizer"
+	// It is possible that we disable redis on the CR; in that instance,
+	// we need to clean up the redis resources
+	if !podInfoCR.Spec.Redis.Enabled {
+		// Cleanup our redis resources
+		if err := r.deleteRedisResources(ctx, podInfoCR); err != nil {
+			// If we fail, return the error so the request is requeued.
+			return ctrl.Result{}, err
+		}
+	}
 
 	if podInfoCR.DeletionTimestamp.IsZero() {
 		// New CR created.
@@ -91,6 +103,14 @@ func (r *PodInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			}
 			loggr.Info("Deployment successfully deleted", "pod_info_cr_name", podInfoCR.Name)
 
+			if podInfoCR.Spec.Redis.Enabled {
+				// Cleanup our redis resources
+				if err := r.deleteRedisResources(ctx, podInfoCR); err != nil {
+					// If we fail, return the error so the request is requeued.
+					return ctrl.Result{}, err
+				}
+			}
+
 			// Remove our finalizer from the CR and update it.
 			controllerutil.RemoveFinalizer(&podInfoCR, CRFinalizer)
 			if err := r.Update(ctx, &podInfoCR); err != nil {
@@ -108,6 +128,14 @@ func (r *PodInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	loggr.Info("Deployment successfully created / updated", "pod_info_cr_name", podInfoCR.Name)
 
+	if podInfoCR.Spec.Redis.Enabled {
+		// Create redis resources
+		if err := r.createRedisResources(ctx, podInfoCR); err != nil {
+			return ctrl.Result{}, err
+		}
+		loggr.Info("Redis resources successfully created / updated", "pod_info_cr_name", podInfoCR.Name)
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -115,7 +143,7 @@ func (r *PodInfoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *PodInfoReconciler) deletePodInfoDeployment(ctx context.Context, podInfoCR angiv1.PodInfo) error {
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      podInfoCR.Name,
+			Name:      fmt.Sprintf("%s-pod-info-deployment", podInfoCR.Name),
 			Namespace: "default",
 		},
 	}
@@ -124,6 +152,57 @@ func (r *PodInfoReconciler) deletePodInfoDeployment(ctx context.Context, podInfo
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+// deleteRedisResources will delete the resources required for redis for a given PodInfo CR
+func (r *PodInfoReconciler) deleteRedisResources(ctx context.Context, podInfoCR angiv1.PodInfo) error {
+	loggr := log.FromContext(ctx)
+
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-redis-deployment", podInfoCR.Name),
+			Namespace: "default",
+		},
+	}
+
+	err := r.Delete(ctx, deployment)
+	// It is possible we reach this point when there is no redis deployment;
+	// in that case, we should ignore not found errors
+	if err != nil {
+		return client.IgnoreNotFound(err)
+	}
+
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-redis-service", podInfoCR.Name),
+			Namespace: "default",
+		},
+	}
+
+	err = r.Delete(ctx, service)
+	// It is possible we reach this point when there is no redis service;
+	// in that case, we should ignore not found errors
+	if err != nil {
+		return client.IgnoreNotFound(err)
+	}
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-redis-cm", podInfoCR.Name),
+			Namespace: "default",
+		},
+	}
+
+	err = r.Delete(ctx, cm)
+	// It is possible we reach this point when there is no redis configmap;
+	// in that case, we should ignore not found errors
+	if err != nil {
+		return client.IgnoreNotFound(err)
+	}
+
+	loggr.Info("Redis resources successfully deleted", "pod_info_cr_name", podInfoCR.Name)
+
 	return nil
 }
 
@@ -139,7 +218,7 @@ func (r *PodInfoReconciler) createOrUpdatePodInfoDeployment(ctx context.Context,
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      podInfoCR.Name,
+			Name:      fmt.Sprintf("%s-pod-info-deployment", podInfoCR.Name),
 			Namespace: "default",
 		},
 	}
@@ -155,12 +234,12 @@ func (r *PodInfoReconciler) createOrUpdatePodInfoDeployment(ctx context.Context,
 			Strategy: appsv1.DeploymentStrategy{
 				Type: appsv1.RollingUpdateDeploymentStrategyType,
 				RollingUpdate: &appsv1.RollingUpdateDeployment{
-					MaxUnavailable: intstrPtr(0),
+					MaxUnavailable: intstrPtr(1),
 				},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					// We hash the env vars (the UI of the spec of the CR) to ensure the pods
+					// We hash the env vars (the UI section of the CR spec) to ensure the pods
 					// roll whenever the env vars chagne. This allows us to hotdeploy var changes
 					Annotations: map[string]string{
 						"envVars": sha256Encode(string(envVars)),
@@ -172,8 +251,9 @@ func (r *PodInfoReconciler) createOrUpdatePodInfoDeployment(ctx context.Context,
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
-							Name:  podInfoCR.Name,
-							Image: fmt.Sprintf("%s:%s", podInfoCR.Spec.Image.Repository, podInfoCR.Spec.Image.Tag),
+							Name:    podInfoCR.Name,
+							Image:   fmt.Sprintf("%s:%s", podInfoCR.Spec.Image.Repository, podInfoCR.Spec.Image.Tag),
+							Command: []string{"./podinfo", fmt.Sprintf("--cache-server=%s", podInfoCR.Spec.UI.Cache), "--host=localhost"},
 							Ports: []corev1.ContainerPort{
 								{
 									ContainerPort: 9898,
@@ -187,6 +267,10 @@ func (r *PodInfoReconciler) createOrUpdatePodInfoDeployment(ctx context.Context,
 								{
 									Name:  "PODINFO_UI_MESSAGE",
 									Value: podInfoCR.Spec.UI.Message,
+								},
+								{
+									Name:  "PODINFO_CACHE_SERVER",
+									Value: podInfoCR.Spec.UI.Cache,
 								},
 							},
 							Resources: corev1.ResourceRequirements{
@@ -208,6 +292,154 @@ func (r *PodInfoReconciler) createOrUpdatePodInfoDeployment(ctx context.Context,
 		return err
 	}
 
+	return nil
+}
+
+func (r *PodInfoReconciler) createRedisResources(ctx context.Context, podInfoCR angiv1.PodInfo) error {
+
+	// Define the ConfigMap
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-redis-cm", podInfoCR.Name),
+			Namespace: "default",
+		},
+		Data: map[string]string{
+			"redis.conf": `maxmemory 64mb
+maxmemory-policy allkeys-lru
+save ""
+appendonly no`,
+		},
+	}
+
+	// Create or update the service
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, configMap, func() error {
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// Define the Redis Deployment
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-redis-deployment", podInfoCR.Name),
+			Namespace: "default",
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: int32Ptr(1),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app": "redis",
+				},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app": "redis",
+					},
+				},
+				Spec: corev1.PodSpec{
+					Volumes: []corev1.Volume{
+						{
+							Name: "data",
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
+							},
+						},
+						{
+							Name: "config",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: fmt.Sprintf("%s-redis-cm", podInfoCR.Name),
+									},
+									Items: []corev1.KeyToPath{
+										{
+											Key:  "redis.conf",
+											Path: "redis.conf",
+										},
+									},
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:  "redis",
+							Image: "redis",
+							Ports: []corev1.ContainerPort{
+								{
+									ContainerPort: 6379,
+								},
+							},
+							Command: []string{"redis-server", "/redis-master/redis.conf"},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "data",
+									MountPath: "/var/lib/redis",
+								},
+								{
+									Name:      "config",
+									MountPath: "/redis-master",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Create or update the service
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// Define the Redis Service
+	service := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-redis-service", podInfoCR.Name),
+			Namespace: "default",
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{
+				"app": "redis",
+			},
+			Ports: []corev1.ServicePort{
+				{
+					Name:       "redis",
+					Protocol:   corev1.ProtocolTCP,
+					Port:       6379,
+					TargetPort: intstr.FromString("redis"),
+				},
+			},
+			Type: corev1.ServiceTypeClusterIP,
+		},
+	}
+
+	// Create or update the service
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, service, func() error {
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// Update the CR with the cache domain -- while this will essentially trigger the reconciliation loop again
+	// this will trigger the deployment to get rehashed
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, &podInfoCR, func() error {
+		// For the sake of this, we assume there is only one port exposed on the service
+		podInfoCR.Spec.UI.Cache = fmt.Sprintf("tcp://%s:%d",
+			service.Spec.ClusterIP,
+			service.Spec.Ports[0].Port)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
