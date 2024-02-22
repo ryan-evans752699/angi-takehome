@@ -47,6 +47,7 @@ type ImageInfo struct {
 type UIInfo struct {
 	Color   string `json:"color"`
 	Message string `json:"message"`
+	Cache   string `json:"cache,omitempty"`
 }
 
 type RedisInfo struct {

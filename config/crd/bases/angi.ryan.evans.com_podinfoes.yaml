@@ -70,6 +70,8 @@ spec:
                 type: object
               ui:
                 properties:
+                  cache:
+                    type: string
                   color:
                     type: string
                   message:
