@@ -18,7 +18,7 @@ spec:
     tag: latest
   ui:
     color: "#34577c"
-    message: "ryan is awesome 34324"
+    message: "ryan is awesome 1234 :)"
     cache: 
   redis:
     enabled: true

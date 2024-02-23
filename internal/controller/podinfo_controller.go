@@ -254,7 +254,7 @@ func (r *PodInfoReconciler) createOrUpdatePodInfoDeployment(ctx context.Context,
 						{
 							Name:    podInfoCR.Name,
 							Image:   fmt.Sprintf("%s:%s", podInfoCR.Spec.Image.Repository, podInfoCR.Spec.Image.Tag),
-							Command: []string{"./podinfo", fmt.Sprintf("--cache-server=%s", podInfoCR.Spec.UI.Cache), "--host=localhost"},
+							Command: []string{"./podinfo", fmt.Sprintf("--cache-server=%s", podInfoCR.Spec.UI.Cache)},
 							Ports: []corev1.ContainerPort{
 								{
 									ContainerPort: 9898,
@@ -397,10 +397,9 @@ func (r *PodInfoReconciler) createRedisResources(ctx context.Context, podInfoCR 
 				{
 					Port:       6379,
 					TargetPort: intstr.FromInt(6379),
-					NodePort:   30379,
 				},
 			},
-			Type: corev1.ServiceTypeNodePort,
+			Type: corev1.ServiceTypeClusterIP,
 		},
 	}
 
