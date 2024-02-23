@@ -38,7 +38,8 @@ import (
 )
 
 const (
-	CRFinalizer = "angi.ryan.evans.com/finalizer"
+	CRFinalizer  = "angi.ryan.evans.com/finalizer"
+	PodNameSpace = "default"
 )
 
 // PodInfoReconciler reconciles a PodInfo object
@@ -144,7 +145,7 @@ func (r *PodInfoReconciler) deletePodInfoDeployment(ctx context.Context, podInfo
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-pod-info-deployment", podInfoCR.Name),
-			Namespace: "default",
+			Namespace: PodNameSpace,
 		},
 	}
 
@@ -162,7 +163,7 @@ func (r *PodInfoReconciler) deleteRedisResources(ctx context.Context, podInfoCR 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-redis-deployment", podInfoCR.Name),
-			Namespace: "default",
+			Namespace: PodNameSpace,
 		},
 	}
 
@@ -176,7 +177,7 @@ func (r *PodInfoReconciler) deleteRedisResources(ctx context.Context, podInfoCR 
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-redis-service", podInfoCR.Name),
-			Namespace: "default",
+			Namespace: PodNameSpace,
 		},
 	}
 
@@ -190,7 +191,7 @@ func (r *PodInfoReconciler) deleteRedisResources(ctx context.Context, podInfoCR 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-redis-cm", podInfoCR.Name),
-			Namespace: "default",
+			Namespace: PodNameSpace,
 		},
 	}
 
@@ -219,7 +220,7 @@ func (r *PodInfoReconciler) createOrUpdatePodInfoDeployment(ctx context.Context,
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-pod-info-deployment", podInfoCR.Name),
-			Namespace: "default",
+			Namespace: PodNameSpace,
 		},
 	}
 
@@ -268,10 +269,6 @@ func (r *PodInfoReconciler) createOrUpdatePodInfoDeployment(ctx context.Context,
 									Name:  "PODINFO_UI_MESSAGE",
 									Value: podInfoCR.Spec.UI.Message,
 								},
-								{
-									Name:  "PODINFO_CACHE_SERVER",
-									Value: podInfoCR.Spec.UI.Cache,
-								},
 							},
 							Resources: corev1.ResourceRequirements{
 								Limits: corev1.ResourceList{
@@ -301,13 +298,10 @@ func (r *PodInfoReconciler) createRedisResources(ctx context.Context, podInfoCR 
 	configMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-redis-cm", podInfoCR.Name),
-			Namespace: "default",
+			Namespace: PodNameSpace,
 		},
 		Data: map[string]string{
-			"redis.conf": `maxmemory 64mb
-maxmemory-policy allkeys-lru
-save ""
-appendonly no`,
+			"redis.conf": ``,
 		},
 	}
 
@@ -323,7 +317,7 @@ appendonly no`,
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-redis-deployment", podInfoCR.Name),
-			Namespace: "default",
+			Namespace: PodNameSpace,
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: int32Ptr(1),
@@ -340,12 +334,6 @@ appendonly no`,
 				},
 				Spec: corev1.PodSpec{
 					Volumes: []corev1.Volume{
-						{
-							Name: "data",
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: &corev1.EmptyDirVolumeSource{},
-							},
-						},
 						{
 							Name: "config",
 							VolumeSource: corev1.VolumeSource{
@@ -366,21 +354,18 @@ appendonly no`,
 					Containers: []corev1.Container{
 						{
 							Name:  "redis",
-							Image: "redis",
+							Image: "redis:latest",
 							Ports: []corev1.ContainerPort{
 								{
 									ContainerPort: 6379,
 								},
 							},
-							Command: []string{"redis-server", "/redis-master/redis.conf"},
+							Args: []string{"redis-server", "/usr/local/etc/redis/redis.conf"},
 							VolumeMounts: []corev1.VolumeMount{
 								{
-									Name:      "data",
-									MountPath: "/var/lib/redis",
-								},
-								{
 									Name:      "config",
-									MountPath: "/redis-master",
+									MountPath: "/usr/local/etc/redis/redis.conf",
+									SubPath:   "redis.conf",
 								},
 							},
 						},
@@ -402,7 +387,7 @@ appendonly no`,
 	service := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-redis-service", podInfoCR.Name),
-			Namespace: "default",
+			Namespace: PodNameSpace,
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
@@ -410,13 +395,12 @@ appendonly no`,
 			},
 			Ports: []corev1.ServicePort{
 				{
-					Name:       "redis",
-					Protocol:   corev1.ProtocolTCP,
 					Port:       6379,
-					TargetPort: intstr.FromString("redis"),
+					TargetPort: intstr.FromInt(6379),
+					NodePort:   30379,
 				},
 			},
-			Type: corev1.ServiceTypeClusterIP,
+			Type: corev1.ServiceTypeNodePort,
 		},
 	}
 
