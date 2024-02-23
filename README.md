@@ -14,32 +14,13 @@ This project defines a custom resource (`PodInfo`) that will track the desired s
 More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
 
 ### To Deploy locally on a cluster (ie: MiniKube)
-**Install the CRDs into the cluster:**
-
-```sh
-make install
-```
-
-**Run the operator locally:**
-
-```sh
-make run
-```
-
-
-**Create a CR in the cluster:**
-
-One is defined in `config/sample` or you can create your own:
-
-```sh
-kubectl apply -k config/samples/
-```
-
-**Modify the CR in the cluster (if needed):**
-
-```sh
-kubectl edit PodInfo <CR_NAME>
-```
+- Install the CRDs into the cluster: `make install`
+- Run the operator locally: `make run`
+- Create a CR in the cluster:
+    - One is defined in `config/sample`: `kubectl apply -k config/samples/`
+- Once applying the CR in the cluster, observe the `PodInfo` and `Redis` resources created in the clsuter
+- Modify the CR in the cluster: `kubectl edit PodInfo <CR_NAME>`
+- Observe the deployment for `PodInfo` roll the pods and roll out the changes
 
 ### To Uninstall
 **Delete the instances (CRs) from the cluster:**
@@ -72,7 +53,17 @@ make undeploy
     - `spec.redis.enabled` to enable /disable redis
     - `spec.replicaCount` to increase / decrease the number of replicas
 5. Watch the operator's deployment logs. If using the custom resource defined in config/samples: `kubectl logs deployment.apps/podinfo-sample-pod-info-deployment`
-6. Validate you chnage by repeating step 2. If you are using port-forwarding, when the pods roll, you will need to re-port-forward the deployment.
+6. Validate your changes by repeating step 2. If you are using port-forwarding, when the pods roll, you will need to re-port-forward the deployment.
+7. If `spec.redis.enabled=true`, you can add a new key by making a `POST` / `PUT` request to `localhost:9898/cache/<key>`. Ex: 
+```
+curl --location --request PUT 'localhost:9898/cache/angi' \
+--header 'Content-Type: text/plain' \
+--data 'Ryan Is Awesome :)'
+```
+8. If `spec.redis.enabled=true`, you can retrieve the value of a given key by making a `GET` request to `localhost:9898/cache/<key>`. Ex: 
+```
+curl --location 'localhost:9898/cache/angi'
+```
 
 
 ## Custom Resource Definition
@@ -102,6 +93,12 @@ This project contains a controller to watch for `PodInfo` custom resources in th
 2. If the `PodInfo` custom resource does not have redis enabled, delete the redis resources. This is used to allow for the cleanup of redis resources if redis was disabled (via editing the `PodInfo` custom resource).
 3. Check if the `PodInfo` custom resource has been deleted, if not, add a finalizer to the `PodInfo` custom resource, if it does not already exist.
 4. If the `PodInfo` custom resource has been deleted, clean up the PodInfo resources and the redis resources in the cluster. Once that is done, remove the finalizer so the `PodInfo` custom resource can be deleted by the api server.
+
+## Possible Enhancements
+
+- Add monitoring for the operator
+- Add auto-scaling and pod disruption budgets to the various deployments
+- Move the creation of in cluster resources (deployments / services / configmaps / etc) into Helm
 
 ## License
 
