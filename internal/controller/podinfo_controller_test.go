@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -25,60 +26,195 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	angiv1 "ryan.evans.com/angi/api/v1"
 )
 
 var _ = Describe("PodInfo Controller", func() {
 	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+		const (
+			resourceName = "test-resource"
+			namespace    = "default"
+			memoryLimit  = "64Mi"
+			cpuRequests  = "100m"
+			imageRepo    = "ghcr.io/stefanprodan/podinfo"
+			imageTag     = "latests"
+			uiColor      = "#34577c"
+			uiMessage    = "ryan is awesome 1234 :)"
+			uiMessage2   = "I have been modified"
+			redisEnabled = true
+		)
 
 		ctx := context.Background()
 
-		typeNamespacedName := types.NamespacedName{
+		crNamespaceName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
-		podinfo := &angiv1.PodInfo{}
+
+		redisServiceNamespacedName := types.NamespacedName{Name: fmt.Sprintf("%s-redis-service", resourceName), Namespace: "default"}
+		redisCMNamespacedName := types.NamespacedName{Name: fmt.Sprintf("%s-redis-cm", resourceName), Namespace: "default"}
+		redisDeploymentNamespacedName := types.NamespacedName{Name: fmt.Sprintf("%s-redis-deployment", resourceName), Namespace: "default"}
+		podInfoDeploymentNamespacedName := types.NamespacedName{Name: fmt.Sprintf("%s-pod-info-deployment", resourceName), Namespace: "default"}
+
+		podInfo := &angiv1.PodInfo{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind PodInfo")
-			err := k8sClient.Get(ctx, typeNamespacedName, podinfo)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &angiv1.PodInfo{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			}
+			By("checking there are no Pod Info CRs")
+			err := k8sClient.Get(ctx, crNamespaceName, podInfo)
+			Expect(errors.IsNotFound(err))
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &angiv1.PodInfo{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			By("Cleanup the specific resource instance PodInfo")
+			err := k8sClient.Get(ctx, crNamespaceName, podInfo)
+			if !errors.IsNotFound(err) {
+				Expect(k8sClient.Delete(ctx, podInfo)).To(Succeed())
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+
+		It("should successfully reconcile the created resource", func() {
+
+			By("creating the custom resource")
+			podInfo = getPodInfoCustomResourceDefinition(resourceName, memoryLimit, cpuRequests, imageRepo,
+				imageTag, uiColor, uiMessage, redisEnabled)
+			err := k8sClient.Create(ctx, podInfo)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance PodInfo")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			By("reconciling the custom resource")
+			controllerReconciler := &PodInfoReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: crNamespaceName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("creating redis resources")
+			redisService := &corev1.Service{}
+			err = controllerReconciler.Client.Get(ctx, redisServiceNamespacedName, redisService)
+			// Assert that a redis service exists
+			Expect(err).NotTo(HaveOccurred())
+
+			redisDeployment := &appsv1.Deployment{}
+			err = controllerReconciler.Client.Get(ctx, redisDeploymentNamespacedName, redisDeployment)
+			// Assert that a redis deployment exists
+			Expect(err).NotTo(HaveOccurred())
+
+			redisCM := &corev1.ConfigMap{}
+			err = controllerReconciler.Client.Get(ctx, redisCMNamespacedName, redisCM)
+			// Assert that a redis configmap exists
+			Expect(err).NotTo(HaveOccurred())
+
+			By("creating podinfo resources")
+			podInfoDeployment := &appsv1.Deployment{}
+			err = controllerReconciler.Client.Get(ctx, podInfoDeploymentNamespacedName, podInfoDeployment)
+			// Assert that a pod info deployment exists
+			Expect(err).NotTo(HaveOccurred())
+
+			By("checking finalizer on custom resource")
+			// Pull the PodInfo CR after reconcile
+			err = controllerReconciler.Client.Get(ctx, crNamespaceName, podInfo)
+			Expect(err).NotTo(HaveOccurred())
+			// Assert that the finalizer 'CRFinalizer' exists
+			Expect(podInfo.Finalizers).To(ContainElement(CRFinalizer))
+
+			By("checking cache value on custom resource")
+			// Assert that the cache value on the CR was updated correctly
+			Expect(podInfo.Spec.UI.Cache).Should(Equal(fmt.Sprintf("tcp://%s:%d", redisService.Spec.ClusterIP, redisService.Spec.Ports[0].Port)))
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
+
+		It("should successfully reconcile the created resource", func() {
+
+			By("reconciling the custom resource")
 			controllerReconciler := &PodInfoReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
+				NamespacedName: crNamespaceName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			By("creating the custom resource")
+			podInfo = getPodInfoCustomResourceDefinition(resourceName, memoryLimit, cpuRequests, imageRepo,
+				imageTag, uiColor, uiMessage, redisEnabled)
+			err = k8sClient.Create(ctx, podInfo)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: crNamespaceName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("deleting the custom resource")
+			// Pull the PodInfo CR after reconcile
+			err = controllerReconciler.Client.Get(ctx, crNamespaceName, podInfo)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Delete the PodInfo CR
+			err = controllerReconciler.Client.Delete(ctx, podInfo)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("reconciling the custom resource")
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: crNamespaceName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+		})
+
+		It("should successfully reconcile the modified resource", func() {
+
+			By("creating the custom resource")
+			podInfo = getPodInfoCustomResourceDefinition(resourceName, memoryLimit, cpuRequests, imageRepo,
+				imageTag, uiColor, uiMessage, redisEnabled)
+			err := k8sClient.Create(ctx, podInfo)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("reconciling the custom resource")
+			controllerReconciler := &PodInfoReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: crNamespaceName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("getting the current PodInfo deployment")
+			podInfoDeployment := &appsv1.Deployment{}
+			err = controllerReconciler.Client.Get(ctx, podInfoDeploymentNamespacedName, podInfoDeployment)
+			// Assert that a pod info deployment exists
+			Expect(err).NotTo(HaveOccurred())
+
+			By("modifying the custom resource")
+			// Pull the PodInfo CR after reconcile
+			err = controllerReconciler.Client.Get(ctx, crNamespaceName, podInfo)
+			Expect(err).NotTo(HaveOccurred())
+			podInfo.Spec.UI.Message = uiMessage2
+			err = k8sClient.Update(ctx, podInfo)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("reconciling the custom resource")
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: crNamespaceName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Checking that the PodInfo deployment was changed")
+			updatedPodInfoDeployment := &appsv1.Deployment{}
+			err = controllerReconciler.Client.Get(ctx, podInfoDeploymentNamespacedName, updatedPodInfoDeployment)
+			// Assert that a pod info deployment exists
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(podInfoDeployment.ResourceVersion != updatedPodInfoDeployment.ResourceVersion)
 		})
 	})
 })

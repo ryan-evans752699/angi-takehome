@@ -99,6 +99,7 @@ This project contains a controller to watch for `PodInfo` custom resources in th
 - Add monitoring for the operator
 - Add auto-scaling and pod disruption budgets to the various deployments
 - Move the creation of in cluster resources (deployments / services / configmaps / etc) into Helm
+- Expose the PodInfo deployment with a LoadBalancer service
 
 ## License
 
