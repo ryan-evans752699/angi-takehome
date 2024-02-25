@@ -17,8 +17,8 @@ More information can be found via the [Kubebuilder Documentation](https://book.k
 - Install the CRDs into the cluster: `make install`
 - Run the operator locally: `make run`
 - Create a CR in the cluster:
-    - One is defined in `config/sample`: `kubectl apply -k config/samples/`
-- Once applying the CR in the cluster, observe the `PodInfo` and `Redis` resources created in the clsuter
+    - One is defined in `config/samples`: `kubectl apply -k config/samples/`
+- Once applying the CR in the cluster, observe the `PodInfo` and `Redis` resources created in the cluster
 - Modify the CR in the cluster: `kubectl edit PodInfo <CR_NAME>`
 - Observe the deployment for `PodInfo` roll the pods and roll out the changes
 
@@ -64,7 +64,6 @@ curl --location --request PUT 'localhost:9898/cache/angi' \
 ```
 curl --location 'localhost:9898/cache/angi'
 ```
-
 
 ## Custom Resource Definition
 This project contains a custom resource definition which is used as the source of truth for the PodInfo deployment in the cluster. The custom resource works as follows:

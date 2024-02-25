@@ -207,8 +207,8 @@ func (r *PodInfoReconciler) deleteRedisResources(ctx context.Context, podInfoCR 
 	return nil
 }
 
-// createOrUpdatePodInfoDeployment creates or updates a deployment K8s resource based on a given
-// PodInfo CR
+// createOrUpdatePodInfoDeployment creates or updates a deployment K8s
+// resource based on a given PodInfo CR
 func (r *PodInfoReconciler) createOrUpdatePodInfoDeployment(ctx context.Context, podInfoCR angiv1.PodInfo) error {
 
 	// Convert the UI settings from the CR into a byte slice
@@ -241,7 +241,7 @@ func (r *PodInfoReconciler) createOrUpdatePodInfoDeployment(ctx context.Context,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					// We hash the env vars (the UI section of the CR spec) to ensure the pods
-					// roll whenever the env vars chagne. This allows us to hotdeploy var changes
+					// roll whenever the env vars change. This allows us to hotdeploy var changes
 					Annotations: map[string]string{
 						"envVars": sha256Encode(string(envVars)),
 					},
@@ -300,6 +300,8 @@ func (r *PodInfoReconciler) createRedisResources(ctx context.Context, podInfoCR 
 			Name:      fmt.Sprintf("%s-redis-cm", podInfoCR.Name),
 			Namespace: PodNameSpace,
 		},
+		// From my testing, the configmap needs to exist, but can be empty
+		// so for the sake of simplicity, I left it empty.
 		Data: map[string]string{
 			"redis.conf": ``,
 		},
